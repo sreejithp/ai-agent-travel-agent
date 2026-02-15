@@ -84,7 +84,7 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools.mcp_tool import MCPToolset, StdioConnectionParams
 from mcp.client.stdio import StdioServerParameters
 
-from agent.prompt import TRAVEL_ADVISOR_PROMPT
+from agent.prompt import get_travel_advisor_prompt
 
 
 def create_agent() -> Agent:
@@ -213,7 +213,7 @@ def create_agent() -> Agent:
     agent = Agent(
         name="maui_travel_advisor",                            # Used in logs and traces
         model=LiteLlm(model="openrouter/openai/gpt-4o"),      # GPT-4o via OpenRouter
-        instruction=TRAVEL_ADVISOR_PROMPT,                     # System prompt from prompt.py
+        instruction=get_travel_advisor_prompt(),                 # System prompt with today's date injected
         tools=[mcp_tools],                                     # Our FastMCP tool server
     )
 
