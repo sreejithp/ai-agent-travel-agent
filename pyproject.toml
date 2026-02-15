@@ -1,0 +1,44 @@
+# =============================================================================
+# pyproject.toml  —  Project Configuration
+# =============================================================================
+#
+# This file defines:
+#   1. Project metadata (name, version, description)
+#   2. Python version requirement
+#   3. Dependencies (what to install)
+#
+# HOW TO USE (with uv — a blazing-fast Python package manager):
+#   uv sync                   # Install all dependencies into .venv
+#   uv run main.py            # Run the agent (auto-creates .venv if needed)
+#   uv add <package>          # Add a new dependency
+#
+# WHY THESE DEPENDENCIES:
+#   - google-adk:  Google Agent Development Kit — the agent framework
+#   - fastmcp:     FastMCP — for defining and serving MCP tools
+#   - litellm:     Universal LLM proxy — lets ADK call OpenAI instead of Gemini
+#
+# HOW THE PIECES FIT:
+#   google-adk is the ORCHESTRATOR (agent loop, tool calling, sessions).
+#   litellm is the ADAPTER that lets ADK talk to OpenAI's API.
+#   fastmcp is the TOOL PROTOCOL for exposing capabilities to the agent.
+#   Everything else is standard Python.
+# =============================================================================
+
+[project]
+name = "maui-travel-advisor"
+version = "0.1.0"
+description = "An AI agent that helps decide if it's a good time to visit Maui"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "google-adk>=0.3.0",
+    "fastmcp>=2.0.0",
+    "litellm>=1.30.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]

@@ -1,0 +1,23 @@
+# Environment variables (contains API keys — NEVER commit this)
+.env
+
+# Python virtual environment
+.venv/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# uv lockfile (optional — some teams commit this, some don't)
+# uv.lock
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
