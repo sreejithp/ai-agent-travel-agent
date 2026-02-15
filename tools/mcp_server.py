@@ -33,6 +33,10 @@
 #     b) Connected to the Google ADK agent via stdio transport
 # =============================================================================
 
+import json
+import logging
+import sys
+
 from fastmcp import FastMCP
 from dataclasses import asdict
 
@@ -43,6 +47,59 @@ from core.user_profile import get_profile, list_available_users
 from core.weather import get_forecast, analyze_weather
 from core.flights import search_flights, analyze_flights
 from core.hotels import search_hotels, evaluate_hotels
+
+# =============================================================================
+# Logging Setup
+# =============================================================================
+# We log to STDERR because the MCP server communicates with the agent via
+# STDOUT (stdin/stdout is the MCP transport).  If we logged to stdout, our
+# log messages would corrupt the MCP JSON protocol and crash the agent.
+#
+# STDERR is safe — it's visible in the terminal but doesn't interfere with
+# the MCP message stream.
+#
+# ANSI COLOR CODES:
+#   We use ANSI escape sequences to color-code log lines in the terminal:
+#     - CYAN for incoming requests (tool name + parameters)
+#     - GREEN for response JSON
+#     - YELLOW for intermediate status/progress messages
+#   This makes it easy to visually scan tool calls vs responses in the output.
+#
+#   These codes work in virtually all modern terminals (macOS Terminal, iTerm2,
+#   VS Code terminal, Linux terminals).  On Windows, they work in Windows
+#   Terminal and PowerShell 7+.
+# =============================================================================
+
+# ANSI color codes for terminal output
+_CYAN = "\033[36m"     # Requests (tool calls with params)
+_GREEN = "\033[32m"    # Responses (JSON output)
+_YELLOW = "\033[33m"   # Status/progress messages
+_RESET = "\033[0m"     # Reset to default terminal color
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [MCP] %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stderr,
+)
+
+
+def _log_request(tool_name: str, **params) -> None:
+    """Log an incoming tool call with its parameters in CYAN."""
+    param_str = ", ".join(f"{k}={v!r}" for k, v in params.items())
+    logging.info(f"{_CYAN}{tool_name} called with: {param_str}{_RESET}")
+
+
+def _log_status(message: str) -> None:
+    """Log an intermediate status message in YELLOW."""
+    logging.info(f"{_YELLOW}  → {message}{_RESET}")
+
+
+def _log_response(tool_name: str, result: dict) -> dict:
+    """Log the tool response as compact JSON in GREEN, then return it."""
+    logging.info(f"{_GREEN}  ← {tool_name} response: {json.dumps(result, separators=(',', ':'))}{_RESET}")
+    return result
+
 
 # =============================================================================
 # Create the FastMCP server instance
@@ -88,17 +145,21 @@ def get_user_profile(user_id: str) -> dict:
 
         Returns an error message if the user_id is not found.
     """
+    _log_request("get_user_profile", user_id=user_id)
+
     profile = get_profile(user_id)
     if profile is None:
         available = list_available_users()
-        return {
+        _log_status(f"User not found. Available: {available}")
+        return _log_response("get_user_profile", {
             "error": f"User '{user_id}' not found.",
             "available_users": available,
             "hint": "Try one of the available user IDs listed above.",
-        }
+        })
     # Convert dataclass → dict for JSON serialization over MCP.
     # asdict() recursively converts nested dataclasses too.
-    return asdict(profile)
+    _log_status(f"Found profile for {profile.name}")
+    return _log_response("get_user_profile", asdict(profile))
 
 
 # =============================================================================
@@ -146,16 +207,26 @@ def get_weather_forecast(
           - best_window, worst_window: Recommended and avoid date ranges
           - summary: Human-readable 2-3 sentence analysis
     """
+    _log_request("get_weather_forecast",
+                 destination=destination, start_date=start_date,
+                 days=days, user_id=user_id)
+
     # Step 1: Get user profile for personalized analysis
     profile = get_profile(user_id)
     if profile is None:
-        return {"error": f"User '{user_id}' not found. Cannot personalize weather analysis."}
+        _log_status(f"User '{user_id}' not found")
+        return _log_response("get_weather_forecast", {
+            "error": f"User '{user_id}' not found. Cannot personalize weather analysis."
+        })
 
     # Step 2: Fetch raw forecast data
     forecasts = get_forecast(destination, start_date, days)
+    _log_status(f"Got {len(forecasts)} days of forecast data")
 
     # Step 3: Analyze against user preferences
     summary = analyze_weather(forecasts, profile, destination)
+    _log_status(f"Analysis: best_window={summary.best_window}, "
+                f"storm_risk_days={summary.storm_risk_days}")
 
     # Step 4: Return SUMMARIZED data (Context Budget Discipline)
     # We explicitly exclude daily_forecasts from the output — the agent
@@ -163,7 +234,7 @@ def get_weather_forecast(
     result = asdict(summary)
     # Remove the raw daily data to keep the response lean
     result.pop("daily_forecasts", None)
-    return result
+    return _log_response("get_weather_forecast", result)
 
 
 # =============================================================================
@@ -213,10 +284,15 @@ def search_and_analyze_flights(
           - options: Top 5 flight options (limited for context budget)
             Each option includes: airline, dates, price, times, stops, duration
     """
+    _log_request("search_and_analyze_flights",
+                 origin=origin, destination=destination,
+                 start_date=start_date, end_date=end_date, user_id=user_id)
+
     # Get profile for budget analysis
     profile = get_profile(user_id)
     if profile is None:
-        return {"error": f"User '{user_id}' not found."}
+        _log_status(f"User '{user_id}' not found")
+        return _log_response("search_and_analyze_flights", {"error": f"User '{user_id}' not found."})
 
     # Search flights
     flights = search_flights(
@@ -226,9 +302,11 @@ def search_and_analyze_flights(
         end_date=end_date,
         trip_length_nights=profile.trip_length_nights,
     )
+    _log_status(f"Found {len(flights)} flight options")
 
     # Analyze against user's budget
     result = analyze_flights(flights, profile)
+    _log_status(f"Analysis: cheapest=${result.cheapest_price}, avg=${result.average_price}")
 
     # Convert to dict and LIMIT options to top 5
     # This is Context Budget Discipline: the agent doesn't need 20 options,
@@ -241,7 +319,7 @@ def search_and_analyze_flights(
         key=lambda x: x["price_usd"],
     )[:5]  # Only top 5!
 
-    return result_dict
+    return _log_response("search_and_analyze_flights", result_dict)
 
 
 # =============================================================================
@@ -290,9 +368,15 @@ def search_and_evaluate_hotels(
             Each includes: name, brand, nightly_rate, total_cost, rating,
             location, has_storm_discount, discount_reason
     """
+    _log_request("search_and_evaluate_hotels",
+                 destination=destination, check_in=check_in,
+                 check_out=check_out, user_id=user_id,
+                 is_storm_period=is_storm_period)
+
     profile = get_profile(user_id)
     if profile is None:
-        return {"error": f"User '{user_id}' not found."}
+        _log_status(f"User '{user_id}' not found")
+        return _log_response("search_and_evaluate_hotels", {"error": f"User '{user_id}' not found."})
 
     # Search hotels
     hotels = search_hotels(
@@ -301,15 +385,17 @@ def search_and_evaluate_hotels(
         check_out=check_out,
         is_storm_period=is_storm_period,
     )
+    _log_status(f"Found {len(hotels)} hotels")
 
     # Evaluate against user preferences
     result = evaluate_hotels(hotels, profile)
+    _log_status(f"Top hotel: {result.options[0].name if result.options else 'none'}")
 
     # Convert and limit to top 5 options
     result_dict = asdict(result)
     result_dict["options"] = result_dict["options"][:5]
 
-    return result_dict
+    return _log_response("search_and_evaluate_hotels", result_dict)
 
 
 # =============================================================================
@@ -366,11 +452,17 @@ def synthesize_travel_recommendation(
           - rejected_options: Periods that were considered and discarded
           - weather_summary, flight_summary, hotel_summary: Component summaries
     """
+    _log_request("synthesize_travel_recommendation",
+                 user_id=user_id, weather_destination=weather_destination,
+                 weather_start_date=weather_start_date, weather_days=weather_days,
+                 flight_origin=flight_origin, flight_destination=flight_destination)
+
     from core.synthesis import synthesize_recommendation
 
     profile = get_profile(user_id)
     if profile is None:
-        return {"error": f"User '{user_id}' not found."}
+        _log_status(f"User '{user_id}' not found")
+        return _log_response("synthesize_travel_recommendation", {"error": f"User '{user_id}' not found."})
 
     # Run the full analysis pipeline
     forecasts = get_forecast(weather_destination, weather_start_date, weather_days)
@@ -403,7 +495,9 @@ def synthesize_travel_recommendation(
 
     # Synthesize everything
     recommendation = synthesize_recommendation(profile, weather, flights, hotels)
-    return asdict(recommendation)
+    _log_status(f"Recommendation: window={recommendation.recommended_window}, "
+                f"confidence={recommendation.confidence}")
+    return _log_response("synthesize_travel_recommendation", asdict(recommendation))
 
 
 # =============================================================================
