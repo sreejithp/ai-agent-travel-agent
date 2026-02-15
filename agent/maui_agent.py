@@ -81,7 +81,8 @@ import sys
 
 from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
-from google.adk.tools.mcp_tool import MCPToolset, StdioServerParameters
+from google.adk.tools.mcp_tool import MCPToolset, StdioConnectionParams
+from mcp.client.stdio import StdioServerParameters
 
 from agent.prompt import TRAVEL_ADVISOR_PROMPT
 
@@ -141,10 +142,28 @@ def create_agent() -> Agent:
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     mcp_server_path = os.path.join(project_root, "tools", "mcp_server.py")
 
+    # Build environment for the subprocess.
+    # KEY FIX: We must add the project root to PYTHONPATH so the subprocess
+    # can find our local packages (core/, tools/).  When ADK spawns the MCP
+    # server, it runs in its own process with its own sys.path.  Without
+    # PYTHONPATH, "from core.xxx import ..." fails with ModuleNotFoundError.
+    #
+    # We inherit the current environment (so PATH, HOME, etc. are available)
+    # and add/extend PYTHONPATH with our project root.
+    subprocess_env = os.environ.copy()
+    existing_pythonpath = subprocess_env.get("PYTHONPATH", "")
+    subprocess_env["PYTHONPATH"] = (
+        f"{project_root}:{existing_pythonpath}" if existing_pythonpath
+        else project_root
+    )
+
     mcp_tools = MCPToolset(
-        connection_params=StdioServerParameters(
-            command="uv",                          # Use uv to manage the subprocess
-            args=["run", "python", mcp_server_path],  # uv run ensures correct .venv
+        connection_params=StdioConnectionParams(
+            server_params=StdioServerParameters(
+                command="uv",                          # Use uv to manage the subprocess
+                args=["run", "python", mcp_server_path],  # uv run ensures correct .venv
+                env=subprocess_env,                    # Pass env with PYTHONPATH set
+            ),
         ),
     )
 
